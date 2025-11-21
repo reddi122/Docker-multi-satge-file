@@ -1,0 +1,155 @@
+Stage 1: Build WAR
+FROM maven:3.9.6-eclipse-temurin-17 AS build
+
+
+Purpose: Sets up the base image for the build stage.
+
+maven:3.9.6-eclipse-temurin-17:
+
+Contains Maven 3.9.6 → used to build the Java project (download dependencies, compile, package WAR).
+
+Contains OpenJDK 17 (Eclipse Temurin) → required for compiling Java 17 code.
+
+AS build: Names this stage build. Later, we can copy artifacts (WAR file) from this stage to the runtime stage.
+
+WORKDIR /app
+
+
+Purpose: Sets the working directory inside the container to /app.
+
+All subsequent commands (like RUN, COPY, git clone) will execute relative to /app.
+
+Helps organize files in a predictable location inside the container.
+
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+
+Purpose: Installs Git for cloning your repository and cleans up temporary files to reduce image size.
+
+Breakdown:
+
+apt-get update → updates the package list to know the latest available packages.
+
+apt-get install -y git → installs Git; -y automatically confirms installation.
+
+rm -rf /var/lib/apt/lists/* → deletes temporary package cache, reduces image size.
+
+Git is needed only in the build stage, not in final runtime.
+
+RUN git clone https://github.com/<username>/<repository>.git .
+
+
+Purpose: Clones your project repository into /app.
+
+. at the end → clones into the current directory rather than creating a subfolder.
+
+COPY pom.xml .
+RUN mvn dependency:go-offline
+
+
+Purpose: Prepares Maven dependencies to speed up builds using Docker caching.
+
+COPY pom.xml .:
+
+Copies only pom.xml first, without the source code.
+
+Docker caches this layer. If pom.xml doesn’t change, the cached dependencies are reused.
+
+RUN mvn dependency:go-offline:
+
+Downloads all Maven dependencies without building the project yet.
+
+Useful for caching in Docker and speeding up future builds.
+
+RUN mvn clean package -DskipTests
+
+
+Purpose: Builds your Java project and packages it as a WAR file.
+
+Breakdown:
+
+mvn clean → cleans previous builds in target/.
+
+mvn package → compiles code and packages as WAR (by default in target/).
+
+-DskipTests → skips running tests to speed up the build.
+
+Output: WAR file in /app/target/.
+
+Stage 2: Tomcat Deployment
+FROM tomcat:10.1.16-jdk17-temurin
+
+
+Purpose: Sets up the runtime stage using Tomcat.
+
+tomcat:10.1.16-jdk17-temurin:
+
+Contains Tomcat 10 → servlet container for running WAR files.
+
+Contains JDK 17, so it can run Java 17 applications.
+
+Multi-stage benefit: This stage does not include Maven or Git, keeping the final image lightweight.
+
+WORKDIR /usr/local/tomcat/webapps
+
+
+Purpose: Sets working directory to Tomcat’s webapps folder.
+
+Any WAR file copied here will be automatically deployed by Tomcat at startup.
+
+COPY --from=build /app/target/*.war ./
+
+
+Purpose: Copies WAR file(s) from the build stage to Tomcat’s webapps directory.
+
+--from=build → copies from the previous stage named build.
+
+/app/target/*.war → WAR file(s) from build output.
+
+./ → destination is current directory (/usr/local/tomcat/webapps).
+
+EXPOSE 8080
+
+
+Purpose: Declares that the container listens on port 8080 (Tomcat’s default HTTP port).
+
+Note: This does not publish the port externally; it’s metadata/documentation for users or orchestration tools (like Docker Compose, Kubernetes).
+
+CMD ["catalina.sh", "run"]
+
+
+Purpose: Default command executed when the container starts.
+
+catalina.sh run → starts Tomcat in foreground mode, so the container stays alive.
+
+Foreground mode is essential because Docker containers exit if the main process ends.
+
+✅ Summary / Flow
+
+Build Stage
+
+Set up Maven + JDK.
+
+Install Git (for cloning).
+
+Clone repo, cache dependencies.
+
+Build WAR file in /app/target/.
+
+Runtime Stage
+
+Set up Tomcat + JDK.
+
+Copy WAR from build stage.
+
+Expose port 8080.
+
+Run Tomcat to deploy the WAR.
+
+Why Multi-Stage is Important
+
+Keeps the final image small (no Maven, no Git, no build tools).
+
+Separates build environment (heavy) from runtime environment (light).
+
+Docker caching makes rebuilds faster, especially if dependencies or code change.
